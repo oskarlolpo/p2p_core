@@ -13,8 +13,75 @@ pub struct ServerInfo {
     pub port: u16,
 }
 
+fn parse_raknet_pong(buf: &[u8], len: usize, default_port: u16) -> Option<ServerInfo> {
+    if buf[0] == 0x1c && len > 35 {
+        let str_data = String::from_utf8_lossy(&buf[35..len]);
+        let parts: Vec<&str> = str_data.split(';').collect();
+        if parts.len() >= 6 {
+            let parsed_port = if parts.len() > 10 {
+                parts[10].parse().unwrap_or(default_port)
+            } else {
+                default_port
+            };
+
+            let host_name = parts.get(1).unwrap_or(&"").to_string();
+            let mut name = parts.get(7).unwrap_or(&"").to_string();
+            if name.is_empty() {
+                name = host_name.clone();
+            }
+
+            return Some(ServerInfo {
+                host_name,
+                mc_version: parts.get(3).unwrap_or(&"").to_string(),
+                players: parts.get(4).unwrap_or(&"0").parse().unwrap_or(0),
+                max_players: parts.get(5).unwrap_or(&"0").parse().unwrap_or(0),
+                name,
+                port: parsed_port,
+            });
+        }
+    }
+    None
+}
+
 pub async fn discover_local_server(timeout_dur: Duration) -> Option<ServerInfo> {
-    discover_server_on_port(19132, timeout_dur).await
+    let active = discover_server_on_port(19132, timeout_dur);
+    let passive = listen_for_broadcasts(19132, timeout_dur);
+    
+    tokio::select! {
+        Some(info) = active => Some(info),
+        Some(info) = passive => Some(info),
+        _ = tokio::time::sleep(timeout_dur) => None,
+    }
+}
+
+async fn listen_for_broadcasts(port: u16, timeout_dur: Duration) -> Option<ServerInfo> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::net::SocketAddr;
+
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).ok()?;
+    socket.set_reuse_address(true).ok()?;
+    #[cfg(not(windows))]
+    let _ = socket.set_reuse_port(true);
+
+    let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().ok()?;
+    socket.bind(&addr.into()).ok()?;
+    socket.set_nonblocking(true).ok()?;
+
+    let std_socket: std::net::UdpSocket = socket.into();
+    let udp_socket = UdpSocket::from_std(std_socket).ok()?;
+
+    let mut buf = [0u8; 2048];
+    let res = tokio::time::timeout(timeout_dur, async {
+        loop {
+            if let Ok((len, _addr)) = udp_socket.recv_from(&mut buf).await {
+                if let Some(info) = parse_raknet_pong(&buf, len, port) {
+                    return Some(info);
+                }
+            }
+        }
+    }).await;
+
+    res.ok().flatten()
 }
 
 pub async fn discover_server_on_port(port: u16, timeout_dur: Duration) -> Option<ServerInfo> {
@@ -98,32 +165,8 @@ pub async fn discover_server_on_port(port: u16, timeout_dur: Duration) -> Option
     let res = tokio::time::timeout(timeout_dur, async {
         loop {
             if let Ok((len, _addr)) = socket.recv_from(&mut buf).await {
-                if buf[0] == 0x1c && len > 35 {
-                    // Parse RakNet PONG
-                    let str_data = String::from_utf8_lossy(&buf[35..len]);
-                    let parts: Vec<&str> = str_data.split(';').collect();
-                    if parts.len() >= 6 {
-                        let parsed_port = if parts.len() > 10 {
-                            parts[10].parse().unwrap_or(port)
-                        } else {
-                            port
-                        };
-                        
-                        let host_name = parts.get(1).unwrap_or(&"").to_string();
-                        let mut name = parts.get(7).unwrap_or(&"").to_string();
-                        if name.is_empty() {
-                            name = host_name.clone();
-                        }
-                        
-                        return Some(ServerInfo {
-                            host_name,
-                            mc_version: parts.get(3).unwrap_or(&"").to_string(),
-                            players: parts.get(4).unwrap_or(&"0").parse().unwrap_or(0),
-                            max_players: parts.get(5).unwrap_or(&"0").parse().unwrap_or(0),
-                            name,
-                            port: parsed_port,
-                        });
-                    }
+                if let Some(info) = parse_raknet_pong(&buf, len, port) {
+                    return Some(info);
                 } else if len >= 48 {
                     // Parse NetherNet Response
                     use aes::Aes256;

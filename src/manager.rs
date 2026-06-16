@@ -33,7 +33,7 @@ use super::{
 use crate::lobby::LobbyManager;
 
 const ABLY_SIGNAL_LABEL: &str = "Ably Presence + Channels";
-const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 3;
+const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 8;
 const CLIENT_CONNECT_TIMEOUT_MS: u64 = 1500;
 const CLIENT_CONNECT_DELAY_MS: u64 = 250;
 const HOST_PUNCH_GRACE_MS: u64 = 1800;
@@ -669,17 +669,8 @@ impl NetworkManager {
                 Some(addr.to_string())
             }
             Err(e) => {
-                if let Some(ref addr) = local_addr_str {
-                    self.push_log(format!(
-                        "STUN failed, using Local IP fallback: {addr} (Error: {e:#})"
-                    ))
-                    .await;
-                    Some(addr.to_string())
-                } else {
-                    self.push_log(format!("STUN failed and no Local IP found: {e:#}"))
-                        .await;
-                    None
-                }
+                self.push_log(format!("STUN failed: {e:#}")).await;
+                None
             }
         };
 
@@ -778,9 +769,9 @@ impl NetworkManager {
 
         let result_str = match (public_udp_addr_str.clone(), local_addr_str) {
             (Some(pub_ip), Some(loc_ip)) => format!("{},{}", pub_ip, loc_ip),
-            (Some(pub_ip), None) => pub_ip,
-            (None, Some(loc_ip)) => loc_ip,
-            (None, None) => String::new(),
+            (Some(pub_ip), None) => format!("{},0.0.0.0:{}", pub_ip, udp_bind_addr.port()),
+            (None, Some(loc_ip)) => format!("0.0.0.0:{},{}", udp_bind_addr.port(), loc_ip),
+            (None, None) => format!("0.0.0.0:{}", udp_bind_addr.port()),
         };
 
         Ok(result_str)
