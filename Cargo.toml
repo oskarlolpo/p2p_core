@@ -1,0 +1,45 @@
+[package]
+name = "p2p_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.37", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing = "0.1"
+
+# Bedrock RS
+bedrock_network = { path = "../../06_Resources/bedrock-rs-main/crates/network" }
+bedrock_protocol = { path = "../../06_Resources/bedrock-rs-main/crates/protocol" }
+rak-rs = { version = "0.3", default-features = false, features = ["async_tokio", "mcpe"] }
+
+# Utilities
+anyhow = "1.0"
+encoding_rs = "0.8"
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+zstd = "0.13"
+socket2 = "0.5"
+rand = "0.8"
+
+# Encryption for NetherNet
+aes = "0.8.4"
+ecb = "0.1.2"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+hex = "0.4.3"
+
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls"] }
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rupnp = "3.0"
+uuid = { version = "1.15", features = ["serde", "v4"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+http = "1.0"
+bytes = "1.0"
+trust-dns-resolver = { version = "0.23", default-features = true }
+get_if_addrs = "0.5.3"
+futures-util = "0.3"
+reqwest-eventsource = "0.6.0"
+rumqttc = "0.25.1"
