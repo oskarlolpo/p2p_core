@@ -33,7 +33,7 @@ use super::{
 use crate::lobby::LobbyManager;
 
 const ABLY_SIGNAL_LABEL: &str = "mcp2p-lobby";
-const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 8;
+const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 10;
 const CLIENT_CONNECT_TIMEOUT_MS: u64 = 1500;
 const CLIENT_CONNECT_DELAY_MS: u64 = 250;
 const HOST_PUNCH_GRACE_MS: u64 = 1800;
@@ -825,13 +825,19 @@ impl NetworkManager {
 
         if let Some(session_id) = relay_session_id {
             if !force_direct {
-                self.start_or_replace_host_relay(
-                    relay_sessions,
-                    display_peer.clone(),
-                    session_id,
-                    local_game_port,
-                )
-                .await;
+                let self_clone = self.clone();
+                let display_peer_clone = display_peer.clone();
+                tokio::spawn(async move {
+                    // Delay relay start to give direct punch a chance to connect first
+                    tokio::time::sleep(tokio::time::Duration::from_millis(HOST_PUNCH_GRACE_MS + 2000)).await;
+                    self_clone.start_or_replace_host_relay(
+                        relay_sessions,
+                        display_peer_clone,
+                        session_id,
+                        local_game_port,
+                    )
+                    .await;
+                });
             } else {
                 self.push_log(format!(
                     "Relay skipped for {display_peer} due to Force Direct Mode"
@@ -1693,9 +1699,14 @@ impl NetworkManager {
             })
             .await;
 
-            let connect = endpoint
-                .connect(peer_addr, "localhost")
-                .context("не удалось запустить QUIC connect")?;
+            let connect = match endpoint.connect(peer_addr, "localhost") {
+                Ok(c) => c,
+                Err(e) => {
+                    last_error = Some(anyhow!("не удалось запустить QUIC connect: {e}"));
+                    tokio::time::sleep(Duration::from_millis(CLIENT_CONNECT_DELAY_MS)).await;
+                    continue;
+                }
+            };
 
             match timeout(Duration::from_millis(CLIENT_CONNECT_TIMEOUT_MS), connect).await {
                 Ok(Ok(connection)) => return Ok(connection),

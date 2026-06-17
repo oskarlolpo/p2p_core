@@ -41,39 +41,41 @@ pub async fn discover_public_addr(
         return Err(anyhow!("no STUN servers configured"));
     }
 
+    let mut server_addrs = Vec::new();
     for server in &config.stun_servers {
-        match discover_public_addr_via_stun(socket.clone(), server).await {
-            Ok(addr) => return Ok(addr),
-            Err(e) => {
-                tracing::debug!("STUN server {} failed: {}", server, e);
+        if let Ok(mut addrs) = lookup_host(server).await {
+            if let Some(addr) = addrs.find(SocketAddr::is_ipv4) {
+                server_addrs.push(addr);
             }
         }
     }
 
-    Err(anyhow!("all STUN servers failed"))
-}
+    if server_addrs.is_empty() {
+        return Err(anyhow!("failed to resolve any IPv4 STUN servers"));
+    }
 
-async fn discover_public_addr_via_stun(socket: Arc<UdpSocket>, server: &str) -> Result<SocketAddr> {
     let request = build_stun_binding_request();
     let mut buffer = [0u8; 1024];
-    let server_addr = lookup_host(server)
-        .await
-        .with_context(|| format!("failed to resolve STUN server: {server}"))?
-        .find(SocketAddr::is_ipv4)
-        .ok_or_else(|| anyhow!("no IPv4 STUN address resolved for {server}"))?;
 
     for _ in 0..4 {
-        socket.send_to(&request, server_addr).await?;
-        if let Ok(Ok((size, _))) =
-            timeout(Duration::from_millis(900), socket.recv_from(&mut buffer)).await
-        {
-            if let Ok(addr) = parse_stun_binding_response(&request, &buffer[..size]) {
-                return Ok(addr);
+        for addr in &server_addrs {
+            let _ = socket.send_to(&request, *addr).await;
+        }
+        
+        let start_time = tokio::time::Instant::now();
+        while start_time.elapsed() < Duration::from_millis(900) {
+            let remaining = Duration::from_millis(900) - start_time.elapsed();
+            if let Ok(Ok((size, _))) = timeout(remaining, socket.recv_from(&mut buffer)).await {
+                if let Ok(addr) = parse_stun_binding_response(&request, &buffer[..size]) {
+                    return Ok(addr);
+                }
+            } else {
+                break; // Timeout occurred
             }
         }
     }
 
-    Err(anyhow!("STUN request to {server} timed out"))
+    Err(anyhow!("STUN requests to all servers timed out"))
 }
 
 fn build_stun_binding_request() -> [u8; 20] {
