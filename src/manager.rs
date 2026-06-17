@@ -530,11 +530,7 @@ impl NetworkManager {
                         if let Some(loc_addr) = &local_udp_addr {
                             let addrs: Vec<String> = loc_addr.split(',').map(|s| s.to_string()).collect();
                             data["listen_addrs"] = serde_json::json!(addrs);
-                            if let Some(first) = addrs.first() {
-                                if let Some(ip) = first.split(':').next() {
-                                    data["local_ip"] = serde_json::Value::String(ip.to_string());
-                                }
-                            }
+                            data["local_ip"] = serde_json::Value::String(loc_addr.clone());
                         }
 
                         if let Some(p) = probe {
