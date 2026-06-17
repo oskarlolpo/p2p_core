@@ -32,7 +32,7 @@ use super::{
 };
 use crate::lobby::LobbyManager;
 
-const ABLY_SIGNAL_LABEL: &str = "Ably Presence + Channels";
+const ABLY_SIGNAL_LABEL: &str = "mcp2p-lobby";
 const CLIENT_CONNECT_RETRY_ATTEMPTS: usize = 8;
 const CLIENT_CONNECT_TIMEOUT_MS: u64 = 1500;
 const CLIENT_CONNECT_DELAY_MS: u64 = 250;

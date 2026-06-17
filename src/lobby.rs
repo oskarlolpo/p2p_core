@@ -5,9 +5,7 @@ use reqwest_eventsource::{Event, EventSource};
 use serde_json::Value;
 use std::time::Duration;
 
-const ABLY_KEY_ID: &str = "aGkPAA.1VHkjw";
-const ABLY_KEY_SECRET: &str = "Bai-67g05FcqHdfVOMiSfjYlK3aLz8wOzj5WeTgz4cw";
-const ABLY_API_KEY: &str = "aGkPAA.1VHkjw:Bai-67g05FcqHdfVOMiSfjYlK3aLz8wOzj5WeTgz4cw";
+const LOBBY_BASE: &str = "http://2.26.87.126:7700";
 const LOBBY_CHANNEL: &str = "minecraft-lobby";
 
 #[derive(Clone)]
@@ -27,11 +25,8 @@ impl LobbyManager {
 
     /// Запрашивает текущее состояние лобби (присутствие хостов)
     pub async fn fetch_presence(&self) -> Result<Vec<Value>> {
-        let presence_url = format!("https://rest.ably.io/channels/{}/presence", LOBBY_CHANNEL);
-        let messages_url = format!(
-            "https://rest.ably.io/channels/{}/messages?limit=50",
-            LOBBY_CHANNEL
-        );
+        let presence_url = format!("{}/channels/{}/presence", LOBBY_BASE, LOBBY_CHANNEL);
+        let messages_url = format!("{}/channels/{}/messages?limit=50", LOBBY_BASE, LOBBY_CHANNEL);
 
         let mut all_messages = Vec::new();
 
@@ -39,7 +34,6 @@ impl LobbyManager {
         let pres_res = self
             .client
             .get(&presence_url)
-            .basic_auth(ABLY_KEY_ID, Some(ABLY_KEY_SECRET))
             .send()
             .await;
 
@@ -55,7 +49,6 @@ impl LobbyManager {
         let msg_res = self
             .client
             .get(&messages_url)
-            .basic_auth(ABLY_KEY_ID, Some(ABLY_KEY_SECRET))
             .send()
             .await;
 
@@ -110,7 +103,7 @@ impl LobbyManager {
 
     /// Публикует присутствие хоста (добавляет его в лобби)
     pub async fn enter_presence(&self, client_id: &str, data: Value) -> Result<()> {
-        let url = format!("https://rest.ably.io/channels/{}/messages", LOBBY_CHANNEL);
+        let url = format!("{}/channels/{}/messages", LOBBY_BASE, LOBBY_CHANNEL);
 
         let payload = serde_json::json!({
             "name": "host-presence",
@@ -121,7 +114,6 @@ impl LobbyManager {
         let res = self
             .client
             .post(&url)
-            .basic_auth(ABLY_KEY_ID, Some(ABLY_KEY_SECRET))
             .json(&payload)
             .send()
             .await?;
@@ -135,17 +127,17 @@ impl LobbyManager {
 
     /// Удаляет хоста из лобби
     pub async fn leave_presence(&self, client_id: &str) -> Result<()> {
-        let url = format!("https://rest.ably.io/channels/{}/presence", LOBBY_CHANNEL);
+        let url = format!("{}/channels/{}/messages", LOBBY_BASE, LOBBY_CHANNEL);
 
         let payload = serde_json::json!({
+            "name": "host-leave",
             "clientId": client_id,
-            "action": 3 // 3 = LEAVE
+            "data": {}
         });
 
         let res = self
             .client
             .post(&url)
-            .basic_auth(ABLY_KEY_ID, Some(ABLY_KEY_SECRET))
             .json(&payload)
             .send()
             .await?;
@@ -159,7 +151,7 @@ impl LobbyManager {
 
     /// Отправляет сообщение (например connect-request) в нужный канал
     pub async fn publish_event(&self, channel: &str, event_name: &str, data: Value) -> Result<()> {
-        let url = format!("https://rest.ably.io/channels/{}/messages", channel);
+        let url = format!("{}/channels/{}/messages", LOBBY_BASE, channel);
 
         let payload = serde_json::json!({
             "name": event_name,
@@ -169,7 +161,6 @@ impl LobbyManager {
         let res = self
             .client
             .post(&url)
-            .basic_auth(ABLY_KEY_ID, Some(ABLY_KEY_SECRET))
             .json(&payload)
             .send()
             .await?;
@@ -183,10 +174,7 @@ impl LobbyManager {
 
     /// Создает SSE подписку на указанный канал
     pub fn subscribe_channel(&self, channel: &str) -> EventSource {
-        let url = format!(
-            "https://realtime.ably.io/sse?v=1.2&channels={}&key={}",
-            channel, ABLY_API_KEY
-        );
+        let url = format!("{}/sse?channels={}", LOBBY_BASE, channel);
 
         EventSource::get(url)
     }

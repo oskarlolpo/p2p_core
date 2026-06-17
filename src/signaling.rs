@@ -37,23 +37,20 @@ pub async fn discover_public_addr(
     socket: Arc<UdpSocket>,
     config: &SignalingConfig,
 ) -> Result<SocketAddr> {
-    let mut futures = Vec::new();
-    for server in &config.stun_servers {
-        let server = server.clone();
-        let socket = socket.clone();
-        futures.push(Box::pin(async move {
-            discover_public_addr_via_stun(socket, &server).await
-        }));
-    }
-
-    if futures.is_empty() {
+    if config.stun_servers.is_empty() {
         return Err(anyhow!("no STUN servers configured"));
     }
 
-    match futures_util::future::select_ok(futures).await {
-        Ok((addr, _)) => Ok(addr),
-        Err(e) => Err(anyhow!("all STUN servers failed: {e}")),
+    for server in &config.stun_servers {
+        match discover_public_addr_via_stun(socket.clone(), server).await {
+            Ok(addr) => return Ok(addr),
+            Err(e) => {
+                tracing::debug!("STUN server {} failed: {}", server, e);
+            }
+        }
     }
+
+    Err(anyhow!("all STUN servers failed"))
 }
 
 async fn discover_public_addr_via_stun(socket: Arc<UdpSocket>, server: &str) -> Result<SocketAddr> {
