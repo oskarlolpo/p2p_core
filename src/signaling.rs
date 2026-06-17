@@ -8,7 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_STUN_SERVERS: &str =
-    "stun.yandex.ru:3478,stun.sipnet.net:3478,stun.cloudflare.com:3478,stun.l.google.com:19302";
+    "stun.cloudflare.com:3478,stun.l.google.com:19302,stun.yandex.ru:3478,stun.sipnet.net:3478";
 const PUNCH_FAST_BURST_PACKETS: usize = 150;
 const PUNCH_FAST_BURST_DELAY_MS: u64 = 20;
 const PUNCH_SUSTAIN_PACKETS: usize = 150;
@@ -41,12 +41,20 @@ pub async fn discover_public_addr(
         return Err(anyhow!("no STUN servers configured"));
     }
 
-    let mut server_addrs = Vec::new();
+    let mut resolve_futs = Vec::new();
     for server in &config.stun_servers {
-        if let Ok(mut addrs) = lookup_host(server).await {
-            if let Some(addr) = addrs.find(SocketAddr::is_ipv4) {
-                server_addrs.push(addr);
+        resolve_futs.push(async move {
+            if let Ok(mut addrs) = lookup_host(server).await {
+                return addrs.find(SocketAddr::is_ipv4);
             }
+            None
+        });
+    }
+
+    let mut server_addrs = Vec::new();
+    for res in futures_util::future::join_all(resolve_futs).await {
+        if let Some(addr) = res {
+            server_addrs.push(addr);
         }
     }
 

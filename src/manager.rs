@@ -148,7 +148,31 @@ impl NetworkManager {
     }
 
     pub async fn refresh_lobby(&self) -> Result<Vec<serde_json::Value>> {
-        self.inner.lobby.fetch_presence().await
+        let presence = self.inner.lobby.fetch_presence().await?;
+        
+        let mut own_peer_id = None;
+        {
+            let status = self.inner.status.read().await;
+            if status.mode == SessionMode::Host {
+                if let Some(code) = &status.room_code {
+                    own_peer_id = Some(code.clone());
+                }
+            }
+        }
+        
+        if let Some(own_id) = own_peer_id {
+            Ok(presence.into_iter().filter(|p| {
+                if let Some(client_id) = p.get("client_id").and_then(|v| v.as_str()) {
+                    client_id != own_id
+                } else if let Some(peer_id) = p.get("peer_id").and_then(|v| v.as_str()) {
+                    peer_id != own_id
+                } else {
+                    true
+                }
+            }).collect())
+        } else {
+            Ok(presence)
+        }
     }
 
     pub async fn update_lobby_presence(
@@ -180,40 +204,61 @@ impl NetworkManager {
     ) {
         use futures_util::StreamExt;
         use reqwest_eventsource::Event;
-        let mut source = self.inner.lobby.subscribe_channel(&channel);
         let channel_clone = channel.clone();
+        let lobby_clone = self.inner.lobby.clone();
 
         tokio::spawn(async move {
+            let mut retry_delay = Duration::from_millis(500);
+            
             loop {
-                tokio::select! {
-                    _ = cancel.cancelled() => break,
-                    event_opt = source.next() => {
-                        let Some(event_res) = event_opt else { break };
-                        match event_res {
-                            Ok(Event::Open) => {}
-                            Ok(Event::Message(msg)) => {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.data) {
-                                    let event_name = msg.event.clone();
-                                    if event_name == "message" || event_name == "lobby-event" || event_name.is_empty() {
-                                        let _ = app.emit("lobby-event", serde_json::json!({
-                                            "channel": channel_clone,
-                                            "data": parsed
-                                        }));
-                                    } else {
-                                        let _ = app.emit(&event_name, serde_json::json!({
-                                            "channel": channel_clone,
-                                            "payload": parsed
-                                        }));
+                if cancel.is_cancelled() {
+                    break;
+                }
+                
+                let mut source = lobby_clone.subscribe_channel(&channel_clone);
+                
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        event_opt = source.next() => {
+                            let Some(event_res) = event_opt else { break }; // End of stream, need to reconnect
+                            match event_res {
+                                Ok(Event::Open) => {
+                                    retry_delay = Duration::from_millis(500); // Reset delay on successful open
+                                }
+                                Ok(Event::Message(msg)) => {
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.data) {
+                                        let event_name = msg.event.clone();
+                                        if event_name == "message" || event_name == "lobby-event" || event_name.is_empty() {
+                                            let _ = app.emit("lobby-event", serde_json::json!({
+                                                "channel": channel_clone,
+                                                "data": parsed
+                                            }));
+                                        } else {
+                                            let _ = app.emit(&event_name, serde_json::json!({
+                                                "channel": channel_clone,
+                                                "payload": parsed
+                                            }));
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                eprintln!("SSE error in channel {}: {}", channel_clone, e);
-                                // Ably SSE will auto-reconnect usually. If it breaks, it will emit an error and re-open.
+                                Err(e) => {
+                                    eprintln!("SSE error in channel {}: {}", channel_clone, e);
+                                    source.close();
+                                    break; // Break inner loop to trigger reconnect
+                                }
                             }
                         }
                     }
                 }
+                
+                if cancel.is_cancelled() {
+                    break;
+                }
+                
+                // Exponential backoff
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(10));
             }
         });
     }
@@ -1185,17 +1230,6 @@ impl NetworkManager {
                 transport: "direct-quic".into(),
             },
         );
-
-        let _nethernet = super::nethernet_broadcaster::NetherNetBroadcaster::start(
-            room_name.clone(),
-            host_name.clone(),
-            mc_version.clone(),
-            slots.clone(),
-            local_port,
-            cancel.clone(),
-        )
-        .await;
-
         let _broadcaster = super::bedrock_broadcaster::BedrockBroadcaster::start(
             room_name.clone(),
             host_name.clone(),
@@ -1542,16 +1576,6 @@ impl NetworkManager {
             wss_relay::start_client_runtime(relay_config, cancel.clone(), Some(ping_tx)).await
         }
         .with_context(|| format!("failed to start WSS relay client session {session_id}"))?;
-
-        let _nethernet = super::nethernet_broadcaster::NetherNetBroadcaster::start(
-            room_name.clone(),
-            host_name.clone(),
-            mc_version.clone(),
-            slots.clone(),
-            local_port,
-            cancel.clone(),
-        )
-        .await;
 
         let _broadcaster = super::bedrock_broadcaster::BedrockBroadcaster::start(
             room_name.clone(),
